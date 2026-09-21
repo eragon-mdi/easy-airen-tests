@@ -222,21 +222,20 @@ func (f *Finder) toItem(q domain.Question) tgbot.Item {
 	}
 
 	return tgbot.Item{
+		Title:    title.text,
 		Question: tgbot.Side{Text: qText, Image: f.render(qRows)},
 		Answer:   tgbot.Side{Text: aText, Image: f.render(aRows)},
 	}
 }
 
-// render возвращает путь к картинке для карточки: исходный файл, если он один и без
-// оформления, иначе — склеенный PNG из кэша. Пусто — картинки нет.
+// render возвращает путь к склеенному PNG из кэша (с номерами и белыми полями).
+// Пусто — картинки нет.
 func (f *Finder) render(rows []imgcompose.Row) string {
 	if len(rows) == 0 {
 		return ""
 	}
-	if len(rows) == 1 && rows[0].Label == 0 && len(rows[0].Left) == 1 && len(rows[0].Right) == 0 {
-		return rows[0].Left[0]
-	}
-
+	// Даже одиночную картинку пропускаем через склейку: она получает белые поля
+	// до «безопасных» пропорций, иначе Telegram обрежет превью в ленте.
 	// Ключ: версия раскладки + строки + размер и время изменения исходных файлов,
 	// чтобы подмена картинки или правка раскладки давали новый файл.
 	h := sha1.New()

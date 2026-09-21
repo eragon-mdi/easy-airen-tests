@@ -20,7 +20,7 @@ import (
 
 // Version меняйте при любом изменении внешнего вида склейки: она входит в ключ кэша
 // готовых файлов, и старые картинки перестанут использоваться.
-const Version = 1
+const Version = 3
 
 // Row — одна строка результата: [номер] [левые картинки] → [правые картинки].
 // Картинки в ячейке идут друг под другом.
@@ -43,6 +43,9 @@ const (
 	maxSide    = 8000     // отсекаем битые заголовки (в банке есть файлы с «шириной» в миллионы)
 	maxPixels  = 16 << 20 // и слишком тяжёлые картинки
 	maxCanvasH = 6000     // Telegram: ширина+высота фото <= 10000
+	maxTall    = 1.0      // высота/ширина: выше картинку дополняем белым по бокам
+	maxWide    = 1.6      // ширина/высота: шире — дополняем сверху и снизу
+	safeMargin = 48       // белый запас сверху и снизу, px
 )
 
 var (
@@ -137,7 +140,34 @@ func Compose(rows []Row) (img *image.RGBA, skipped []error) {
 		f := float64(maxCanvasH) / float64(h)
 		canvas = resize(canvas, max(1, int(float64(w)*f)), maxCanvasH)
 	}
-	return canvas, skipped
+	return padToRatio(canvas), skipped
+}
+
+// padToRatio дополняет картинку белыми полями до допустимых пропорций: в ленте чата
+// Telegram обрезает слишком высокие (сверху/снизу) и слишком широкие фото, а так
+// в превью видно всё, не открывая картинку.
+func padToRatio(src *image.RGBA) *image.RGBA {
+	// Запас сверху и снизу: даже если клиент подрежет край, обрежется белое поле.
+	if m := max(safeMargin, src.Bounds().Dy()/20); m > 0 {
+		out := image.NewRGBA(image.Rect(0, 0, src.Bounds().Dx(), src.Bounds().Dy()+2*m))
+		draw.Draw(out, out.Bounds(), image.NewUniform(white), image.Point{}, draw.Src)
+		draw.Draw(out, image.Rect(0, m, src.Bounds().Dx(), m+src.Bounds().Dy()), src, src.Bounds().Min, draw.Src)
+		src = out
+	}
+	w, h := src.Bounds().Dx(), src.Bounds().Dy()
+	nw, nh := w, h
+	if float64(h) > maxTall*float64(w) {
+		nw = int(float64(h)/maxTall + 0.5)
+	} else if float64(w) > maxWide*float64(h) {
+		nh = int(float64(w)/maxWide + 0.5)
+	}
+	if nw == w && nh == h {
+		return src
+	}
+	out := image.NewRGBA(image.Rect(0, 0, nw, nh))
+	draw.Draw(out, out.Bounds(), image.NewUniform(white), image.Point{}, draw.Src)
+	draw.Draw(out, image.Rect((nw-w)/2, (nh-h)/2, (nw-w)/2+w, (nh-h)/2+h), src, src.Bounds().Min, draw.Src)
+	return out
 }
 
 // WritePNG кодирует картинку в w.

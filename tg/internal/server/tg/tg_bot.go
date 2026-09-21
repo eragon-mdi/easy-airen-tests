@@ -2,8 +2,12 @@ package tgbot
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"net/http"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	configs "tgbot/internal/cfgs"
 	"time"
 
@@ -12,9 +16,30 @@ import (
 
 type tgBot struct {
 	mu       sync.Mutex
-	sessions map[int64]*session // ключ — chat ID
+	sessions map[int64]*session   // ключ — chat ID
+	chats    map[int64]*chatState // ключ — chat ID
 	finder   Finder
 	cfg      *configs.Configs
+	ids      *fileIDs // file_id уже загруженных картинок
+}
+
+// chatState сериализует обработку апдейтов одного чата: воркеров несколько (разные
+// чаты идут параллельно), а два нажатия одного пользователя не должны править
+// карточку одновременно.
+type chatState struct {
+	mu     sync.Mutex
+	navGen atomic.Uint64 // номер последнего нажатия «листать/ответ»; см. onCallback
+}
+
+func (a *tgBot) chat(id int64) *chatState {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c := a.chats[id]
+	if c == nil {
+		c = &chatState{}
+		a.chats[id] = c
+	}
+	return c
 }
 
 type Finder interface {
@@ -25,8 +50,11 @@ type Finder interface {
 // callback_data слишком мала, чтобы таскать в ней запрос и результаты.
 type session struct {
 	query    string
-	all      []Item // все найденные варианты
-	refining bool   // true — следующий текст дописываем к query
+	all      []Item  // все найденные варианты
+	groups   [][]int // группы по одинаковой формулировке: индексы в all
+	cur      []int   // что сейчас листает пользователь: индексы в all (группа или всё)
+	fromList bool    // true — в ленту попали из списка формулировок (есть куда вернуться)
+	refining bool    // true — следующий текст дописываем к query
 }
 
 // Side — одна «сторона» карточки: текст и (возможно) картинка.
@@ -37,6 +65,7 @@ type Side struct {
 
 // Item — один вариант выдачи: вопрос и ответ.
 type Item struct {
+	Title    string // формулировка вопроса без оформления — по ней группируем
 	Question Side
 	Answer   Side
 }
@@ -44,11 +73,18 @@ type Item struct {
 func New(ctx context.Context, cfg *configs.Configs, finder Finder) (func(context.Context), error) {
 	app := &tgBot{
 		sessions: map[int64]*session{},
+		chats:    map[int64]*chatState{},
 		cfg:      cfg,
 		finder:   finder,
 	}
 
+	sum := sha1.Sum([]byte(cfg.TGBotToken))
+	app.ids = loadFileIDs(filepath.Join(cfg.PathRenderedDir, "file_ids_"+hex.EncodeToString(sum[:])[:10]+".json"))
+
 	opts := []bot.Option{
+		// По умолчанию воркер один: все апдейты идут строго по очереди, и медленная
+		// правка одной карточки тормозит всех. Чаты обрабатываются параллельно.
+		bot.WithWorkers(8),
 		bot.WithDefaultHandler(app.onText),
 		bot.WithCallbackQueryDataHandler("", bot.MatchTypePrefix, app.onCallback),
 		// Таймаут проверки токена (getMe) при создании бота.

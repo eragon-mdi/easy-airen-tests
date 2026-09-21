@@ -18,6 +18,9 @@ func (a *tgBot) onText(ctx context.Context, b *bot.Bot, u *models.Update) {
 	}
 	chatID := u.Message.Chat.ID
 	text := strings.TrimSpace(u.Message.Text)
+	ch := a.chat(chatID)
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
 	log.Printf("[tg] text chat=%d raw=%q runes=%d", chatID, u.Message.Text, utf8.RuneCountInString(text))
 
 	a.mu.Lock()
@@ -28,7 +31,7 @@ func (a *tgBot) onText(ctx context.Context, b *bot.Bot, u *models.Update) {
 	}
 	// Команды сбрасывают сессию в любой момент: следующий текст — новый запрос.
 	if text == "/start" || text == "/new" || text == "/cancel" {
-		s.refining, s.query, s.all = false, "", nil
+		s.refining, s.query, s.all, s.groups, s.cur = false, "", nil, nil, nil
 		a.mu.Unlock()
 		send(ctx, b, chatID, "Ок, начинаем заново. Введите новый запрос.")
 		return
@@ -64,9 +67,18 @@ func (a *tgBot) onText(ctx context.Context, b *bot.Bot, u *models.Update) {
 		return
 	}
 
-	a.mu.Lock()
-	s.query, s.all = query, items
-	a.mu.Unlock()
+	groups := groupItems(items)
+	log.Printf("[tg] chat=%d групп по формулировке: %d", chatID, len(groups))
 
-	a.render(ctx, b, chatID, nil, 0, false)
+	a.mu.Lock()
+	s.query, s.all, s.groups = query, items, groups
+	if len(groups) == 1 { // формулировка одна — сразу лента
+		s.cur, s.fromList = allIndexes(len(items)), false
+		a.mu.Unlock()
+		a.render(ctx, b, chatID, nil, 0, false)
+		return
+	}
+	s.fromList = true
+	a.mu.Unlock()
+	a.renderList(ctx, b, chatID, nil, 0)
 }

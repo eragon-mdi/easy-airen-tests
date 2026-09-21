@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -19,12 +17,12 @@ const manyResults = 10
 func (a *tgBot) render(ctx context.Context, b *bot.Bot, chatID int64, old *models.Message, idx int, showAnswer bool) {
 	a.mu.Lock()
 	s := a.sessions[chatID]
-	if s == nil || idx < 0 || idx >= len(s.all) {
+	if s == nil || idx < 0 || idx >= len(s.cur) {
 		a.mu.Unlock()
 		return
 	}
-	item := s.all[idx]
-	total := len(s.all)
+	item := s.all[s.cur[idx]]
+	total, fromList, found := len(s.cur), s.fromList, len(s.all)
 	a.mu.Unlock()
 
 	side, title := item.Question, "❓ Вопрос"
@@ -41,44 +39,24 @@ func (a *tgBot) render(ctx context.Context, b *bot.Bot, chatID int64, old *model
 		limit = 1024
 	}
 	head := fmt.Sprintf("%s %d из %d", title, idx+1, total)
-	if idx == 0 && !showAnswer { // первая карточка: сразу даём понять, сколько нашлось
-		head = fmt.Sprintf("🔎 Найдено вопросов: %d\n", total) + head
+	if idx == 0 && !showAnswer && !fromList { // формулировка одна: сразу даём понять, сколько нашлось
+		head = fmt.Sprintf("🔎 Найдено вопросов: %d\n", found) + head
 		if total > manyResults {
 			head += "\n⚠️ Результатов много — лучше уточнить запрос (кнопка в конце ленты)."
 		}
 	}
 	body := truncate(head+"\n\n"+side.Text, limit)
-	kb := keyboard(idx, total, showAnswer)
+	kb := keyboard(idx, total, showAnswer, fromList)
 
 	hasPhoto := side.Image != ""
 	oldHasPhoto := old != nil && len(old.Photo) > 0
 
 	switch {
 	case old == nil:
-		sendCard(ctx, b, chatID, side, body, kb)
+		a.sendCard(ctx, b, chatID, side, body, kb)
 
 	case hasPhoto && oldHasPhoto:
-		// EditMessageMedia — заменить картинку+подпись в уже отправленном фото-сообщении.
-		// Media — models.InputMedia; InputMediaPhoto принимает URL или file_id в поле Media.
-		// Для локального файла Media = "attach://<имя>", а байты идут в MediaAttachment.
-		media := &models.InputMediaPhoto{Media: side.Image, Caption: body}
-		if !isRemote(side.Image) {
-			f, err := os.Open(side.Image)
-			if err != nil {
-				logErr("open image", err)
-				return
-			}
-			defer f.Close()
-			name := filepath.Base(side.Image)
-			media.Media, media.MediaAttachment = "attach://"+name, f
-		}
-		_, err := b.EditMessageMedia(ctx, &bot.EditMessageMediaParams{
-			ChatID:      chatID,
-			MessageID:   old.ID,
-			Media:       media,
-			ReplyMarkup: kb,
-		})
-		logErr("EditMessageMedia", err)
+		a.editPhoto(ctx, b, chatID, old.ID, side.Image, body, kb)
 
 	case !hasPhoto && !oldHasPhoto:
 		// EditMessageText — поменять текст и клавиатуру у текстового сообщения.
@@ -95,6 +73,6 @@ func (a *tgBot) render(ctx context.Context, b *bot.Bot, chatID int64, old *model
 		// поэтому удаляем старое и шлём новое.
 		_, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: old.ID})
 		logErr("DeleteMessage", err)
-		sendCard(ctx, b, chatID, side, body, kb)
+		a.sendCard(ctx, b, chatID, side, body, kb)
 	}
 }

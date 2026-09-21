@@ -31,34 +31,100 @@ func imageUsable(img string) bool {
 	return true
 }
 
-func sendCard(ctx context.Context, b *bot.Bot, chatID int64, side Side, body string, kb *models.InlineKeyboardMarkup) {
+// photoInput готовит фото к отправке: file_id, URL или загрузка локального файла.
+// Второе значение — файл, который нужно закрыть после вызова API (или nil).
+func (a *tgBot) photoInput(img, id string) (models.InputFile, *os.File, error) {
+	switch {
+	case id != "":
+		return &models.InputFileString{Data: id}, nil, nil
+	case isRemote(img):
+		return &models.InputFileString{Data: img}, nil, nil
+	}
+	f, err := os.Open(img)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &models.InputFileUpload{Filename: filepath.Base(img), Data: f}, f, nil
+}
+
+// remember сохраняет file_id самой крупной версии фото из ответа Telegram.
+func (a *tgBot) remember(img string, m *models.Message) {
+	if m != nil && len(m.Photo) > 0 {
+		a.ids.set(img, m.Photo[len(m.Photo)-1].FileID)
+	}
+}
+
+// sendCard отправляет карточку. Картинку по возможности берём по file_id (без загрузки).
+func (a *tgBot) sendCard(ctx context.Context, b *bot.Bot, chatID int64, side Side, body string, kb *models.InlineKeyboardMarkup) {
 	log.Printf("[tg] sendCard chat=%d image=%q bodyRunes=%d", chatID, side.Image, utf8.RuneCountInString(body))
-	if side.Image != "" {
-		// SendPhoto — sendPhoto. Photo: InputFileString принимает URL или file_id;
-		// InputFileUpload — загрузка байтов локального файла (multipart).
-		// Caption — подпись под фото.
-		var photo models.InputFile = &models.InputFileString{Data: side.Image}
-		if !isRemote(side.Image) {
-			f, err := os.Open(side.Image)
-			if err != nil {
-				logErr("open image", err)
-				send(ctx, b, chatID, body)
-				return
-			}
-			defer f.Close()
-			photo = &models.InputFileUpload{Filename: filepath.Base(side.Image), Data: f}
+	if side.Image == "" {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: body, ReplyMarkup: kb})
+		logErr("SendMessage", err)
+		return
+	}
+
+	id := a.ids.get(side.Image)
+	for {
+		photo, f, err := a.photoInput(side.Image, id)
+		if err != nil {
+			logErr("open image", err)
+			send(ctx, b, chatID, body)
+			return
 		}
-		_, err := b.SendPhoto(ctx, &bot.SendPhotoParams{
-			ChatID:      chatID,
-			Photo:       photo,
-			Caption:     body,
-			ReplyMarkup: kb,
-		})
+		m, err := b.SendPhoto(ctx, &bot.SendPhotoParams{ChatID: chatID, Photo: photo, Caption: body, ReplyMarkup: kb})
+		if f != nil {
+			f.Close()
+		}
+		if err == nil {
+			a.remember(side.Image, m)
+			return
+		}
+		if id != "" { // file_id мог устареть — забываем и пробуем с загрузкой
+			log.Printf("[tg] file_id не подошёл (%v), загружаю файл заново", err)
+			a.ids.drop(side.Image)
+			id = ""
+			continue
+		}
 		logErr("SendPhoto", err)
 		return
 	}
-	_, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: body, ReplyMarkup: kb})
-	logErr("SendMessage", err)
+}
+
+// editPhoto заменяет картинку и подпись в фото-сообщении; по file_id — без загрузки.
+func (a *tgBot) editPhoto(ctx context.Context, b *bot.Bot, chatID int64, msgID int, img, body string, kb *models.InlineKeyboardMarkup) {
+	id := a.ids.get(img)
+	for {
+		media := &models.InputMediaPhoto{Media: img, Caption: body}
+		var f *os.File
+		switch {
+		case id != "":
+			media.Media = id
+		case !isRemote(img):
+			var err error
+			if f, err = os.Open(img); err != nil {
+				logErr("open image", err)
+				return
+			}
+			// Для локального файла Media = "attach://<имя>", а байты идут в MediaAttachment.
+			media.Media, media.MediaAttachment = "attach://"+filepath.Base(img), f
+		}
+		m, err := b.EditMessageMedia(ctx, &bot.EditMessageMediaParams{ChatID: chatID, MessageID: msgID, Media: media, ReplyMarkup: kb})
+		if f != nil {
+			f.Close()
+		}
+		if err == nil {
+			a.remember(img, m)
+			return
+		}
+		if id != "" {
+			log.Printf("[tg] file_id не подошёл (%v), загружаю файл заново", err)
+			a.ids.drop(img)
+			id = ""
+			continue
+		}
+		logErr("EditMessageMedia", err)
+		return
+	}
 }
 
 func send(ctx context.Context, b *bot.Bot, chatID int64, text string) {

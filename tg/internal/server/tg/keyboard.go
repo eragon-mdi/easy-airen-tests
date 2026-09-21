@@ -7,7 +7,7 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
-func keyboard(idx, total int, showAnswer bool) *models.InlineKeyboardMarkup {
+func keyboard(idx, total int, showAnswer, fromList bool) *models.InlineKeyboardMarkup {
 	// Ряд навигации: ◀ 2/5 ▶. Кнопка = models.InlineKeyboardButton;
 	// CallbackData — то, что придёт в CallbackQuery.Data при нажатии.
 	prev := models.InlineKeyboardButton{Text: " ", CallbackData: cbNoop}
@@ -27,6 +27,9 @@ func keyboard(idx, total int, showAnswer bool) *models.InlineKeyboardMarkup {
 	}
 
 	rows := [][]models.InlineKeyboardButton{{prev, counter, next}, {toggle}}
+	if fromList {
+		rows = append(rows, []models.InlineKeyboardButton{{Text: "↩ К списку формулировок", CallbackData: cbList}})
+	}
 
 	// Дошли до конца ленты — предлагаем уточнить запрос или начать новый.
 	if idx == total-1 {
