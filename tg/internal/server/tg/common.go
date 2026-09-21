@@ -55,33 +55,35 @@ func (a *tgBot) remember(img string, m *models.Message) {
 }
 
 // sendCard отправляет карточку. Картинку по возможности берём по file_id (без загрузки).
-func (a *tgBot) sendCard(ctx context.Context, b *bot.Bot, chatID int64, side Side, body string, kb *models.InlineKeyboardMarkup) {
-	log.Printf("[tg] sendCard chat=%d image=%q bodyRunes=%d", chatID, side.Image, utf8.RuneCountInString(body))
-	if side.Image == "" {
-		_, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: body, ReplyMarkup: kb})
+func (a *tgBot) sendCard(ctx context.Context, b *bot.Bot, chatID int64, img, body string, kb *models.InlineKeyboardMarkup) {
+	log.Printf("[tg] sendCard chat=%d image=%q bodyRunes=%d", chatID, img, utf8.RuneCountInString(body))
+	if img == "" {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: body, ParseMode: models.ParseModeHTML, ReplyMarkup: kb})
 		logErr("SendMessage", err)
 		return
 	}
 
-	id := a.ids.get(side.Image)
+	id := a.ids.get(img)
 	for {
-		photo, f, err := a.photoInput(side.Image, id)
+		photo, f, err := a.photoInput(img, id)
 		if err != nil {
 			logErr("open image", err)
-			send(ctx, b, chatID, body)
+			// без картинки: тот же текст обычным сообщением
+			_, err = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: body, ParseMode: models.ParseModeHTML, ReplyMarkup: kb})
+			logErr("SendMessage", err)
 			return
 		}
-		m, err := b.SendPhoto(ctx, &bot.SendPhotoParams{ChatID: chatID, Photo: photo, Caption: body, ReplyMarkup: kb})
+		m, err := b.SendPhoto(ctx, &bot.SendPhotoParams{ChatID: chatID, Photo: photo, Caption: body, ParseMode: models.ParseModeHTML, ReplyMarkup: kb})
 		if f != nil {
 			f.Close()
 		}
 		if err == nil {
-			a.remember(side.Image, m)
+			a.remember(img, m)
 			return
 		}
 		if id != "" { // file_id мог устареть — забываем и пробуем с загрузкой
 			log.Printf("[tg] file_id не подошёл (%v), загружаю файл заново", err)
-			a.ids.drop(side.Image)
+			a.ids.drop(img)
 			id = ""
 			continue
 		}
@@ -94,7 +96,7 @@ func (a *tgBot) sendCard(ctx context.Context, b *bot.Bot, chatID int64, side Sid
 func (a *tgBot) editPhoto(ctx context.Context, b *bot.Bot, chatID int64, msgID int, img, body string, kb *models.InlineKeyboardMarkup) {
 	id := a.ids.get(img)
 	for {
-		media := &models.InputMediaPhoto{Media: img, Caption: body}
+		media := &models.InputMediaPhoto{Media: img, Caption: body, ParseMode: models.ParseModeHTML}
 		var f *os.File
 		switch {
 		case id != "":

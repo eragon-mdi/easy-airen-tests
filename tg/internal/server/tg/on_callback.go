@@ -14,7 +14,6 @@ const (
 	// Префиксы callback_data. Лимит Telegram на callback_data — 64 байта,
 	// поэтому храним только короткую команду + индекс, а сами данные — в сессии.
 	cbNav    = "nav:"   // nav:<idx>  — показать вопрос с номером idx
-	cbAnswer = "ans:"   // ans:<idx>  — показать ответ для idx
 	cbRefine = "refine" // пользователь будет дописывать запрос
 	cbNoop   = "noop"   // кнопка-счётчик «2/5», ничего не делает
 	cbNew    = "new"    // выйти из режима уточнения и начать новый запрос
@@ -47,7 +46,7 @@ func (a *tgBot) onCallback(ctx context.Context, b *bot.Bot, u *models.Update) {
 	// карточку целиком (индекс лежит в callback_data), поэтому промежуточные можно
 	// пропустить: достаточно последней.
 	ch := a.chat(chatID)
-	isNav := strings.HasPrefix(data, cbNav) || strings.HasPrefix(data, cbAnswer)
+	isNav := strings.HasPrefix(data, cbNav)
 	var gen uint64
 	if isNav {
 		gen = ch.navGen.Add(1)
@@ -71,11 +70,10 @@ func (a *tgBot) onCallback(ctx context.Context, b *bot.Bot, u *models.Update) {
 	case data == cbNoop:
 		a.mu.Unlock()
 
-	case strings.HasPrefix(data, cbNav), strings.HasPrefix(data, cbAnswer):
-		showAnswer := strings.HasPrefix(data, cbAnswer)
-		idx, _ := strconv.Atoi(data[strings.Index(data, ":")+1:])
+	case strings.HasPrefix(data, cbNav):
+		idx, _ := strconv.Atoi(data[len(cbNav):])
 		a.mu.Unlock()
-		a.render(ctx, b, chatID, msg, idx, showAnswer)
+		a.render(ctx, b, chatID, msg, idx)
 
 	case strings.HasPrefix(data, cbGroup):
 		g, _ := strconv.Atoi(data[len(cbGroup):])
@@ -85,7 +83,7 @@ func (a *tgBot) onCallback(ctx context.Context, b *bot.Bot, u *models.Update) {
 		}
 		s.cur = s.groups[g]
 		a.mu.Unlock()
-		a.render(ctx, b, chatID, msg, 0, false)
+		a.render(ctx, b, chatID, msg, 0)
 
 	case strings.HasPrefix(data, cbPage):
 		p, _ := strconv.Atoi(data[len(cbPage):])
@@ -95,7 +93,7 @@ func (a *tgBot) onCallback(ctx context.Context, b *bot.Bot, u *models.Update) {
 	case data == cbAll:
 		s.cur = allIndexes(len(s.all))
 		a.mu.Unlock()
-		a.render(ctx, b, chatID, msg, 0, false)
+		a.render(ctx, b, chatID, msg, 0)
 
 	case data == cbList:
 		a.mu.Unlock()

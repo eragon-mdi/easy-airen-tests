@@ -56,7 +56,7 @@ func (a *tgBot) onText(ctx context.Context, b *bot.Bot, u *models.Update) {
 	items, err := a.finder.Find(query)
 	log.Printf("[tg] Find(%q) -> %d items, err=%v", query, len(items), err)
 	for i, it := range items {
-		log.Printf("[tg]   #%d Q=%q (img=%q) A=%q (img=%q)", i, it.Question.Text, it.Question.Image, it.Answer.Text, it.Answer.Image)
+		log.Printf("[tg]   #%d Q=%q A=%q code=%d img=%q", i, it.Question, it.Answer, len(it.Code), it.Image)
 	}
 	if err != nil {
 		send(ctx, b, chatID, "Ошибка поиска, попробуйте позже.")
@@ -75,7 +75,7 @@ func (a *tgBot) onText(ctx context.Context, b *bot.Bot, u *models.Update) {
 	if len(groups) == 1 { // формулировка одна — сразу лента
 		s.cur, s.fromList = allIndexes(len(items)), false
 		a.mu.Unlock()
-		a.render(ctx, b, chatID, nil, 0, false)
+		a.render(ctx, b, chatID, nil, 0)
 		return
 	}
 	s.fromList = true

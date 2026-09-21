@@ -20,13 +20,14 @@ import (
 
 // Version меняйте при любом изменении внешнего вида склейки: она входит в ключ кэша
 // готовых файлов, и старые картинки перестанут использоваться.
-const Version = 3
+const Version = 4
 
 // Row — одна строка результата: [номер] [левые картинки] → [правые картинки].
 // Картинки в ячейке идут друг под другом.
 type Row struct {
 	Label       int      // 0 — без номера
 	Left, Right []string // пути к файлам
+	Divider     bool     // не картинки, а зелёная черта-разделитель «условие / ответ»
 }
 
 const (
@@ -53,7 +54,10 @@ var (
 	ink    = color.RGBA{31, 58, 95, 255}
 	grey   = color.RGBA{200, 205, 212, 255}
 	arrowC = color.RGBA{90, 98, 110, 255}
+	green  = color.RGBA{39, 160, 84, 255}
 )
+
+const dividerH = 10 // толщина разделителя, px
 
 type cell struct {
 	imgs []*image.RGBA
@@ -73,15 +77,34 @@ func Compose(rows []Row) (img *image.RGBA, skipped []error) {
 		colW = pairColW
 	}
 
+	// Строка без правой части в «парном» режиме занимает всю ширину (условие над парами).
+	fullW := colW
+	if hasRight {
+		fullW = 2*colW + arrowW
+	}
+
 	type prepared struct {
 		label       int
 		left, right cell
 		h           int
+		divider     bool
+		span        bool // левая часть на всю ширину
 	}
 	var prep []prepared
 	for _, r := range rows {
-		p := prepared{label: r.Label}
-		p.left = loadCell(r.Left, colW, &skipped)
+		if r.Divider {
+			// разделитель нужен только между двумя блоками
+			if len(prep) > 0 && !prep[len(prep)-1].divider {
+				prep = append(prep, prepared{divider: true, h: dividerH})
+			}
+			continue
+		}
+		p := prepared{label: r.Label, span: hasRight && len(r.Right) == 0}
+		lw := colW
+		if p.span {
+			lw = fullW
+		}
+		p.left = loadCell(r.Left, lw, &skipped)
 		p.right = loadCell(r.Right, colW, &skipped)
 		if len(p.left.imgs)+len(p.right.imgs) == 0 {
 			continue
@@ -91,6 +114,9 @@ func Compose(rows []Row) (img *image.RGBA, skipped []error) {
 			p.h = max(p.h, badgeH())
 		}
 		prep = append(prep, p)
+	}
+	if n := len(prep); n > 0 && prep[n-1].divider { // разделитель в конце не нужен
+		prep = prep[:n-1]
 	}
 	if len(prep) == 0 {
 		return nil, skipped
@@ -121,17 +147,26 @@ func Compose(rows []Row) (img *image.RGBA, skipped []error) {
 			}
 			x += badgeCol
 		}
-		drawCell(canvas, p.left, x, y, colW)
-		if hasRight {
-			if len(p.left.imgs) > 0 && len(p.right.imgs) > 0 {
-				drawArrow(canvas, x+colW, y+p.h/2, arrowW)
+		switch {
+		case p.divider:
+			hline(canvas, pad, w-pad, y, dividerH, green)
+		case p.span:
+			drawCell(canvas, p.left, x, y, fullW)
+		default:
+			drawCell(canvas, p.left, x, y, colW)
+			if hasRight {
+				if len(p.left.imgs) > 0 && len(p.right.imgs) > 0 {
+					drawArrow(canvas, x+colW, y+p.h/2, arrowW)
+				}
+				drawCell(canvas, p.right, x+colW+arrowW, y, colW)
 			}
-			drawCell(canvas, p.right, x+colW+arrowW, y, colW)
 		}
 		y += p.h
 		if i < len(prep)-1 {
-			ly := y + rowGap/2
-			hline(canvas, pad, w-pad, ly, 2, grey)
+			// тонкая серая линия — между обычными строками; у разделителя своя зелёная
+			if !p.divider && !prep[i+1].divider {
+				hline(canvas, pad, w-pad, y+rowGap/2, 2, grey)
+			}
 			y += rowGap
 		}
 	}

@@ -32,7 +32,7 @@ func groupItems(items []Item) [][]int {
 	var groups [][]int
 	byKey := map[string]int{}
 	for i, it := range items {
-		key := normalize(it.Title)
+		key := normalize(it.Question)
 		if key == "" { // формулировки нет (только картинка) — не группируем
 			key = fmt.Sprintf("\x00%d", i)
 		}

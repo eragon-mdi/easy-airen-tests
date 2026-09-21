@@ -13,12 +13,12 @@ func TestNormalize(t *testing.T) {
 
 func TestGroupItems(t *testing.T) {
 	items := []Item{
-		{Title: "Как  сбросить пароль?"},
-		{Title: "Ток открытого диода"},
-		{Title: "как сбросить ПАРОЛЬ"},
-		{Title: "Ток закрытого диода"}, // отличается одним словом — другая группа
-		{Title: ""}, // без формулировки — не группируется
-		{Title: ""},
+		{Question: "Как  сбросить пароль?"},
+		{Question: "Ток открытого диода"},
+		{Question: "как сбросить ПАРОЛЬ"},
+		{Question: "Ток закрытого диода"}, // отличается одним словом — другая группа
+		{Question: ""}, // без формулировки — не группируется
+		{Question: ""},
 	}
 	want := [][]int{{0, 2}, {1}, {3}, {4}, {5}}
 	if got := groupItems(items); !reflect.DeepEqual(got, want) {

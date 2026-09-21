@@ -57,17 +57,12 @@ type session struct {
 	refining bool    // true — следующий текст дописываем к query
 }
 
-// Side — одна «сторона» карточки: текст и (возможно) картинка.
-type Side struct {
-	Text  string
-	Image string // URL или file_id Telegram; пусто — картинки нет
-}
-
-// Item — один вариант выдачи: вопрос и ответ.
+// Item — один вариант выдачи: карточка целиком, ответ виден сразу.
 type Item struct {
-	Title    string // формулировка вопроса без оформления — по ней группируем
-	Question Side
-	Answer   Side
+	Question string // формулировка вопроса; по ней же группируем одинаковые
+	Answer   string // ответ текстом; пусто, если ответ только на картинке
+	Code     string // скрипт параметрического вопроса — показываем моноширинным блоком
+	Image    string // одна склеенная картинка: условие сверху, ответ снизу; пусто — без картинки
 }
 
 func New(ctx context.Context, cfg *configs.Configs, finder Finder) (func(context.Context), error) {

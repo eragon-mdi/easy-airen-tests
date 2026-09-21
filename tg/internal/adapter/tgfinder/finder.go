@@ -8,12 +8,15 @@
 // Интерфейс Finder объявлен на стороне потребителя (tgbot), поэтому tgbot
 // не импортирует ни domain, ни storage; сборка происходит в main.
 //
-// Что попадает в карточку (условие показываем сразу, ответ — по кнопке):
+// Карточка — вопрос и сразу ответ, одним сообщением:
 //
-//	select   вопрос: заголовок (+ картинки)          ответ: только правильные варианты
-//	input    вопрос: заголовок (+ картинки)          ответ: паттерны с quality=1
-//	match    вопрос: заголовок + левые элементы 1..N ответ: пары «N: левый → правый»
-//	classify вопрос: заголовок + названия групп      ответ: «группа: элементы»
+//	подпись: формулировка + ответ текстом (+ скрипт у параметрических input)
+//	картинка: условие (картинки заголовка) / зелёная черта / ответ
+//
+//	select   ответ: только правильные варианты (текстом и/или картинками)
+//	input    ответ: паттерны с quality=1 (маска «*» убирается) и скрипт
+//	match    одна картинка из строк «№ [условие слева] → [соответствие справа]»
+//	classify «группа: элементы»
 //
 // Неправильные варианты select и distractors в match не показываются.
 // Несколько картинок склеиваются в одну (см. imgcompose): в Telegram у сообщения одно фото.
@@ -131,13 +134,14 @@ func (f *Finder) content(c domain.Content) block {
 	return block{text: strings.TrimSpace(b.String()), imgs: imgs}
 }
 
+// toItem собирает карточку целиком: формулировка, ответ текстом и ОДНА картинка —
+// условие сверху, зелёная черта, ответ снизу. Если у условия или ответа картинок нет,
+// соответствующая часть и черта просто не рисуются.
 func (f *Finder) toItem(q domain.Question) tgbot.Item {
 	title := f.content(q.Title)
-	// Картинки условия не нумеруем: их нужно просто увидеть целиком.
-	qRows := plain(title.imgs)
-	qText := title.text
-	var aText string
-	var aRows []imgcompose.Row
+	rows := plain(title.imgs) // картинки условия — без номеров, их нужно просто увидеть
+	var answer, code string
+	var ansRows []imgcompose.Row
 
 	switch q.Type {
 	case domain.TypeSelect:
@@ -152,57 +156,48 @@ func (f *Finder) toItem(q domain.Question) tgbot.Item {
 			}
 			imgs = append(imgs, c.imgs...)
 		}
-		aText = bullets(texts)
-		aRows = numbered(imgs) // несколько правильных картинок — с номерами
+		answer = bullets(texts)
+		ansRows = numbered(imgs) // несколько правильных картинок — с номерами
 
 	case domain.TypeInput:
 		var texts []string
 		for _, p := range q.Patterns {
 			if p.Quality == 1 {
-				texts = append(texts, p.Value)
+				texts = append(texts, cleanPattern(p))
 			}
 		}
 		if len(texts) == 0 { // на всякий случай: частичные ответы лучше пустоты
 			for _, p := range q.Patterns {
-				texts = append(texts, p.Value)
+				texts = append(texts, cleanPattern(p))
 			}
 		}
-		aText = bullets(texts)
+		answer = bullets(texts)
+		// Параметрический вопрос: числа генерирует скрипт, в банке — только заглушки
+		// $(имя) и формула. Показываем формулу; подставить числа можно самому.
+		code = strings.TrimSpace(strings.Join(q.Scripts, "\n\n"))
 
 	case domain.TypeMatch:
-		var qLines, aLines []string
+		var lines []string
 		for i, p := range q.Pairs {
 			n := i + 1
 			l, r := f.content(p.Left), f.content(p.Right)
-			if l.text != "" {
-				qLines = append(qLines, fmt.Sprintf("%d. %s", n, l.text))
-			}
-			if len(l.imgs) > 0 { // левые элементы — часть условия, показываем сразу
-				qRows = append(qRows, imgcompose.Row{Label: n, Left: l.imgs})
-			}
 			if l.text != "" || r.text != "" {
-				aLines = append(aLines, fmt.Sprintf("%d. %s → %s", n, orPic(l), orPic(r)))
+				lines = append(lines, fmt.Sprintf("%d. %s → %s", n, orPic(l), orPic(r)))
 			}
-			if len(r.imgs) > 0 { // строка «номер: левая → правая» — пара не перепутается
-				aRows = append(aRows, imgcompose.Row{Label: n, Left: l.imgs, Right: r.imgs})
+			// Одна строка «номер: условие слева → соответствие справа». Отдельного
+			// столбца «условия» нет: слева в строках уже стоят картинки условия.
+			if len(l.imgs)+len(r.imgs) > 0 {
+				ansRows = append(ansRows, imgcompose.Row{Label: n, Left: l.imgs, Right: r.imgs})
 			}
 		}
-		qText = joinNonEmpty("\n\n", qText, strings.Join(qLines, "\n"))
-		aText = strings.Join(aLines, "\n")
+		answer = strings.Join(lines, "\n")
 
 	case domain.TypeClassify:
-		var qLines, aLines []string
+		var lines []string
 		for i, g := range q.Groups {
 			n := i + 1
 			gt := f.content(g.Title)
-			if gt.text != "" {
-				qLines = append(qLines, fmt.Sprintf("%d. %s", n, gt.text))
-			}
-			if len(gt.imgs) > 0 {
-				qRows = append(qRows, imgcompose.Row{Label: n, Left: gt.imgs})
-			}
-			var itemTexts []string
-			var itemImgs []string
+			var itemTexts, itemImgs []string
 			for _, it := range g.Items {
 				c := f.content(it)
 				if c.text != "" {
@@ -210,22 +205,39 @@ func (f *Finder) toItem(q domain.Question) tgbot.Item {
 				}
 				itemImgs = append(itemImgs, c.imgs...)
 			}
-			if len(itemTexts) > 0 {
-				aLines = append(aLines, fmt.Sprintf("%d. %s: %s", n, orPic(gt), strings.Join(itemTexts, ", ")))
+			switch {
+			case len(itemTexts) > 0:
+				lines = append(lines, fmt.Sprintf("%d. %s: %s", n, orPic(gt), strings.Join(itemTexts, ", ")))
+			case gt.text != "" && len(itemImgs) > 0: // элементы — картинки, они справа на рисунке
+				lines = append(lines, fmt.Sprintf("%d. %s — на картинке", n, gt.text))
 			}
-			if len(itemImgs) > 0 {
-				aRows = append(aRows, imgcompose.Row{Label: n, Left: gt.imgs, Right: itemImgs})
+			if len(gt.imgs)+len(itemImgs) > 0 {
+				ansRows = append(ansRows, imgcompose.Row{Label: n, Left: gt.imgs, Right: itemImgs})
 			}
 		}
-		qText = joinNonEmpty("\n\n", qText, strings.Join(qLines, "\n"))
-		aText = strings.Join(aLines, "\n")
+		answer = strings.Join(lines, "\n")
 	}
 
-	return tgbot.Item{
-		Title:    title.text,
-		Question: tgbot.Side{Text: qText, Image: f.render(qRows)},
-		Answer:   tgbot.Side{Text: aText, Image: f.render(aRows)},
+	if len(rows) > 0 && len(ansRows) > 0 {
+		rows = append(rows, imgcompose.Row{Divider: true})
 	}
+	rows = append(rows, ansRows...)
+
+	return tgbot.Item{
+		Question: title.text,
+		Answer:   answer,
+		Code:     code,
+		Image:    f.render(rows),
+	}
+}
+
+// cleanPattern убирает маску: «*текст*» -> «текст» (звёздочки у пользователя лишь путают).
+func cleanPattern(p domain.Pattern) string {
+	v := p.Value
+	if p.Wildcard {
+		v = strings.Trim(v, "*")
+	}
+	return v
 }
 
 // render возвращает путь к склеенному PNG из кэша (с номерами и белыми полями).

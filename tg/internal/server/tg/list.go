@@ -28,7 +28,7 @@ func (a *tgBot) renderList(ctx context.Context, b *bot.Bot, chatID int64, old *m
 	groups, total := s.groups, len(s.all)
 	titles := make([]string, len(groups))
 	for i, g := range groups {
-		titles[i] = s.all[g[0]].Title
+		titles[i] = s.all[g[0]].Question
 	}
 	a.mu.Unlock()
 
